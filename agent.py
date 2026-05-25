@@ -1,12 +1,11 @@
 """
 ╔══════════════════════════════════════════════════════════╗
 ║   AGENTE YOUTUBE AUTOMÁTICO — IA & Tecnología ES        ║
-║   Stack: Gemini · Edge TTS · Pexels · MoviePy · YT API  ║
+║   Stack: Groq · Edge TTS · Pexels · MoviePy · YT API    ║
 ╚══════════════════════════════════════════════════════════╝
 """
  
 import os
-import sys
 import json
 import time
 import random
@@ -31,7 +30,7 @@ from google.auth.transport.requests import Request
 # CONFIGURACIÓN
 # ══════════════════════════════════════════════
  
-GEMINI_API_KEY        = os.environ["GEMINI_API_KEY"]
+GROQ_API_KEY          = os.environ["GROQ_API_KEY"]
 PEXELS_API_KEY        = os.environ["PEXELS_API_KEY"]
 YOUTUBE_REFRESH_TOKEN = os.environ["YOUTUBE_REFRESH_TOKEN"]
 YOUTUBE_CLIENT_ID     = os.environ["YOUTUBE_CLIENT_ID"]
@@ -55,7 +54,7 @@ def log(emoji: str, msg: str):
     print(f"[{ts}] {emoji}  {msg}", flush=True)
  
  
-def reintentar(func, intentos=5, espera=30):
+def reintentar(func, intentos=3, espera=10):
     for i in range(intentos):
         try:
             return func()
@@ -67,11 +66,10 @@ def reintentar(func, intentos=5, espera=30):
  
  
 # ══════════════════════════════════════════════
-# PASO 1 — GUION CON GEMINI (gratis)
+# PASO 1 — GUION CON GROQ (gratis, muy rápido)
 # ══════════════════════════════════════════════
  
 def generar_guion() -> dict:
-    """Genera título, guion y metadatos con Google Gemini."""
     today = datetime.now().strftime("%d de %B de %Y")
  
     prompt = f"""Fecha actual: {today}
@@ -90,24 +88,40 @@ Devuelve ÚNICAMENTE este JSON exacto, sin markdown, sin explicaciones, sin text
   "guion": "Texto completo de la voz en off. Entre 220 y 270 palabras. Empieza con una pregunta o dato impactante. Tono divulgativo, cercano y emocionante. No menciones que el vídeo es generado por IA."
 }}"""
  
-    url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
-           f"gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}")
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json"
+    }
  
     payload = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {
-            "temperature": 0.85,
-            "maxOutputTokens": 1200,
-        }
+        "model": "llama-3.3-70b-versatile",
+        "messages": [
+            {
+                "role": "system",
+                "content": "Eres un guionista experto de YouTube. Respondes ÚNICAMENTE con JSON válido, sin markdown ni texto extra."
+            },
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ],
+        "temperature": 0.85,
+        "max_tokens": 1200,
     }
  
     def _llamar():
-        resp = requests.post(url, json=payload, timeout=30)
+        resp = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers=headers,
+            json=payload,
+            timeout=30
+        )
         resp.raise_for_status()
-        texto = resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+        texto = resp.json()["choices"][0]["message"]["content"].strip()
         # Limpiar posibles bloques markdown
         if "```" in texto:
-            texto = texto.split("```")[1]
+            partes = texto.split("```")
+            texto = partes[1] if len(partes) > 1 else partes[0]
             if texto.startswith("json"):
                 texto = texto[4:]
         return json.loads(texto.strip())
@@ -131,16 +145,18 @@ async def generar_audio(texto: str, output_path: Path):
 # PASO 3 — CLIPS DE PEXELS (gratis)
 # ══════════════════════════════════════════════
  
-def descargar_clips_pexels(keywords: list[str]) -> list[Path]:
+def descargar_clips_pexels(keywords: list) -> list:
     headers = {"Authorization": PEXELS_API_KEY}
-    descargados: list[Path] = []
+    descargados = []
  
     for kw in keywords[:2]:
         log("🎬", f"Buscando clips: '{kw}'")
         try:
-            url  = (f"https://api.pexels.com/videos/search"
-                    f"?query={requests.utils.quote(kw)}"
-                    f"&per_page=8&orientation=landscape&size=medium")
+            url = (
+                f"https://api.pexels.com/videos/search"
+                f"?query={requests.utils.quote(kw)}"
+                f"&per_page=8&orientation=landscape&size=medium"
+            )
             resp = requests.get(url, headers=headers, timeout=15)
             resp.raise_for_status()
             videos = resp.json().get("videos", [])
@@ -187,9 +203,8 @@ def crear_miniatura(titulo: str, output_path: Path):
     for y in range(H):
         ratio = y / H
         r = int(40 * (1 - ratio))
-        g = int(0  * (1 - ratio))
         b = int(90 * (1 - ratio))
-        draw.line([(0, y), (W, y)], fill=(r, g, b))
+        draw.line([(0, y), (W, y)], fill=(r, 0, b))
  
     draw.rectangle([(0, H - 120), (W, H)], fill=(15, 10, 40))
     draw.rectangle([(0, 0), (W, 6)], fill=(120, 60, 255))
@@ -230,7 +245,7 @@ def crear_miniatura(titulo: str, output_path: Path):
 # PASO 5 — MONTAJE CON MOVIEPY (gratis)
 # ══════════════════════════════════════════════
  
-def montar_video(clips_paths: list[Path], audio_path: Path, output_path: Path):
+def montar_video(clips_paths: list, audio_path: Path, output_path: Path):
     audio          = AudioFileClip(str(audio_path))
     duracion_total = audio.duration
     log("🎞", f"Duración del audio: {duracion_total:.1f}s")
@@ -297,8 +312,10 @@ def obtener_credenciales_youtube() -> Credentials:
         token_uri="https://oauth2.googleapis.com/token",
         client_id=YOUTUBE_CLIENT_ID,
         client_secret=YOUTUBE_CLIENT_SECRET,
-        scopes=["https://www.googleapis.com/auth/youtube.upload",
-                "https://www.googleapis.com/auth/youtube"],
+        scopes=[
+            "https://www.googleapis.com/auth/youtube.upload",
+            "https://www.googleapis.com/auth/youtube"
+        ],
     )
     creds.refresh(Request())
     return creds
@@ -332,8 +349,12 @@ def subir_a_youtube(video_path: Path, thumb_path: Path, meta: dict) -> str:
         },
     }
  
-    media   = MediaFileUpload(str(video_path), mimetype="video/mp4",
-                              chunksize=10 * 1024 * 1024, resumable=True)
+    media   = MediaFileUpload(
+        str(video_path),
+        mimetype="video/mp4",
+        chunksize=10 * 1024 * 1024,
+        resumable=True
+    )
     request = youtube.videos().insert(part="snippet,status", body=body, media_body=media)
  
     response = None
@@ -369,7 +390,7 @@ async def main():
     print("─" * 55)
  
     try:
-        log("1/6", "Generando guion con Gemini…")
+        log("1/6", "Generando guion con Groq…")
         meta = generar_guion()
  
         log("2/6", "Generando voz con Edge TTS…")
