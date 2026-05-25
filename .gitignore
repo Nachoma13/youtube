@@ -1,0 +1,10 @@
+# No subir nunca a GitHub
+output/
+youtube_secrets.json
+client_secret.json
+*.mp4
+*.mp3
+*.jpg
+__pycache__/
+*.pyc
+.env
