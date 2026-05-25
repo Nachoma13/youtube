@@ -55,7 +55,7 @@ def log(emoji: str, msg: str):
     print(f"[{ts}] {emoji}  {msg}", flush=True)
  
  
-def reintentar(func, intentos=3, espera=5):
+def reintentar(func, intentos=5, espera=30):
     for i in range(intentos):
         try:
             return func()
