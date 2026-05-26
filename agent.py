@@ -1,7 +1,7 @@
 """
 ╔══════════════════════════════════════════════════════════╗
 ║   AGENTE YOUTUBE AUTOMÁTICO — IA & Tecnología ES        ║
-║   Stack: Groq · Edge TTS · Pexels · MoviePy · YT API    ║
+║   Stack: Groq · Edge TTS · Pexels · ffmpeg · YT API     ║
 ╚══════════════════════════════════════════════════════════╝
 """
  
@@ -11,15 +11,12 @@ import time
 import random
 import asyncio
 import textwrap
+import subprocess
 import requests
 from pathlib import Path
 from datetime import datetime
  
 import edge_tts
-from moviepy.editor import (
-    VideoFileClip, AudioFileClip,
-    concatenate_videoclips, ColorClip
-)
 from PIL import Image, ImageDraw, ImageFont
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
@@ -65,6 +62,28 @@ def reintentar(func, intentos=3, espera=10):
             time.sleep(espera)
  
  
+def ffmpeg(*args):
+    """Ejecuta ffmpeg con los argumentos dados."""
+    cmd = ["ffmpeg", "-y"] + list(args)
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"ffmpeg error: {result.stderr[-500:]}")
+    return result
+ 
+ 
+def duracion_clip(path: Path) -> float:
+    """Obtiene la duración de un clip con ffprobe."""
+    result = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+         "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
+        capture_output=True, text=True
+    )
+    try:
+        return float(result.stdout.strip())
+    except Exception:
+        return 0.0
+ 
+ 
 # ══════════════════════════════════════════════
 # PASO 1 — GUION CON GROQ (gratis, muy rápido)
 # ══════════════════════════════════════════════
@@ -100,10 +119,7 @@ Devuelve ÚNICAMENTE este JSON exacto, sin markdown, sin explicaciones, sin text
                 "role": "system",
                 "content": "Eres un guionista experto de YouTube. Respondes ÚNICAMENTE con JSON válido, sin markdown ni texto extra."
             },
-            {
-                "role": "user",
-                "content": prompt
-            }
+            {"role": "user", "content": prompt}
         ],
         "temperature": 0.85,
         "max_tokens": 1200,
@@ -112,13 +128,10 @@ Devuelve ÚNICAMENTE este JSON exacto, sin markdown, sin explicaciones, sin text
     def _llamar():
         resp = requests.post(
             "https://api.groq.com/openai/v1/chat/completions",
-            headers=headers,
-            json=payload,
-            timeout=30
+            headers=headers, json=payload, timeout=30
         )
         resp.raise_for_status()
         texto = resp.json()["choices"][0]["message"]["content"].strip()
-        # Limpiar posibles bloques markdown
         if "```" in texto:
             partes = texto.split("```")
             texto = partes[1] if len(partes) > 1 else partes[0]
@@ -233,8 +246,8 @@ def crear_miniatura(titulo: str, output_path: Path):
         font=font_sub, fill=(190, 150, 255), anchor="mm"
     )
  
-    cx, cy, r = 100, 100, 52
-    draw.ellipse([(cx - r, cy - r), (cx + r, cy + r)], fill=(80, 30, 200))
+    cx, cy, radio = 100, 100, 52
+    draw.ellipse([(cx-radio, cy-radio), (cx+radio, cy+radio)], fill=(80, 30, 200))
     draw.text((cx, cy), "AI", font=font_med, fill="white", anchor="mm")
  
     img.save(str(output_path), quality=95)
@@ -242,63 +255,99 @@ def crear_miniatura(titulo: str, output_path: Path):
  
  
 # ══════════════════════════════════════════════
-# PASO 5 — MONTAJE CON MOVIEPY (gratis)
+# PASO 5 — MONTAJE CON FFMPEG PURO (sin MoviePy)
 # ══════════════════════════════════════════════
  
 def montar_video(clips_paths: list, audio_path: Path, output_path: Path):
-    audio          = AudioFileClip(str(audio_path))
-    duracion_total = audio.duration
-    log("🎞", f"Duración del audio: {duracion_total:.1f}s")
+    """Monta el vídeo usando ffmpeg directamente, sin MoviePy."""
  
-    segmentos = []
-    acumulado = 0.0
-    fuentes   = list(clips_paths) * 4
+    # Obtener duración del audio
+    dur_audio = duracion_clip(audio_path)
+    log("🎞", f"Duración del audio: {dur_audio:.1f}s")
+ 
+    # Preparar fragmentos de clips hasta cubrir el audio
+    fragmentos = []
+    acumulado  = 0.0
+    fuentes    = list(clips_paths) * 4
     random.shuffle(fuentes)
  
     for cp in fuentes:
-        if acumulado >= duracion_total:
+        if acumulado >= dur_audio:
             break
-        try:
-            clip     = VideoFileClip(str(cp))
-            inicio   = random.uniform(0, max(0, clip.duration - 5))
-            max_dur  = min(12.0, clip.duration - inicio)
-            frag_dur = min(max_dur, duracion_total - acumulado)
-            if frag_dur < 1.0:
-                clip.close()
-                continue
+        dur_clip = duracion_clip(cp)
+        if dur_clip < 1.0:
+            continue
  
-            frag = clip.subclip(inicio, inicio + frag_dur).resize((VIDEO_W, VIDEO_H))
-            segmentos.append(frag)
+        inicio   = random.uniform(0, max(0, dur_clip - 5))
+        max_dur  = min(12.0, dur_clip - inicio)
+        frag_dur = min(max_dur, dur_audio - acumulado)
+        if frag_dur < 0.5:
+            continue
+ 
+        frag_path = OUTPUT_DIR / f"frag_{len(fragmentos):03d}.mp4"
+        try:
+            # Recortar + escalar a 1920x1080 + forzar 24fps
+            ffmpeg(
+                "-ss", str(inicio),
+                "-t",  str(frag_dur),
+                "-i",  str(cp),
+                "-vf", f"scale={VIDEO_W}:{VIDEO_H}:force_original_aspect_ratio=increase,"
+                       f"crop={VIDEO_W}:{VIDEO_H},fps={FPS}",
+                "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+                "-an",
+                str(frag_path)
+            )
+            fragmentos.append(frag_path)
             acumulado += frag_dur
             log("  ✂️", f"{cp.name} → {frag_dur:.1f}s")
-            clip.close()
         except Exception as e:
-            log("⚠️", f"Error con {cp.name}: {e}")
+            log("⚠️", f"Error procesando {cp.name}: {e}")
  
-    if not segmentos:
-        log("⚠️", "Sin clips válidos, generando fondo de color")
-        segmentos = [ColorClip(
-            size=(VIDEO_W, VIDEO_H),
-            color=(8, 8, 18),
-            duration=duracion_total
-        )]
+    # Si no hay fragmentos, crear fondo negro
+    if not fragmentos:
+        log("⚠️", "Sin clips, generando fondo negro")
+        fondo = OUTPUT_DIR / "frag_000.mp4"
+        ffmpeg(
+            "-f", "lavfi",
+            "-i", f"color=c=black:size={VIDEO_W}x{VIDEO_H}:rate={FPS}",
+            "-t", str(dur_audio),
+            "-c:v", "libx264", "-preset", "fast",
+            str(fondo)
+        )
+        fragmentos = [fondo]
  
-    video_base  = concatenate_videoclips(segmentos, method="compose")
-    video_final = video_base.set_audio(audio)
+    # Crear lista de archivos para concatenar
+    lista_path = OUTPUT_DIR / "lista.txt"
+    with open(lista_path, "w") as f:
+        for frag in fragmentos:
+            f.write(f"file '{frag.resolve()}'\n")
  
-    video_final.write_videofile(
-        str(output_path),
-        fps=FPS,
-        codec="libx264",
-        audio_codec="aac",
-        preset="fast",
-        threads=4,
-        logger=None,
-        ffmpeg_params=["-crf", "23"],
+    # Concatenar todos los fragmentos
+    concat_path = OUTPUT_DIR / "concat.mp4"
+    ffmpeg(
+        "-f", "concat", "-safe", "0",
+        "-i", str(lista_path),
+        "-c", "copy",
+        str(concat_path)
     )
+ 
+    # Mezclar vídeo + audio final
+    ffmpeg(
+        "-i", str(concat_path),
+        "-i", str(audio_path),
+        "-map", "0:v:0", "-map", "1:a:0",
+        "-c:v", "copy", "-c:a", "aac",
+        "-shortest",
+        str(output_path)
+    )
+ 
     log("✅", f"Vídeo listo: {output_path.name}")
-    video_final.close()
-    audio.close()
+ 
+    # Limpiar temporales
+    for frag in fragmentos:
+        frag.unlink(missing_ok=True)
+    concat_path.unlink(missing_ok=True)
+    lista_path.unlink(missing_ok=True)
  
  
 # ══════════════════════════════════════════════
@@ -350,10 +399,8 @@ def subir_a_youtube(video_path: Path, thumb_path: Path, meta: dict) -> str:
     }
  
     media   = MediaFileUpload(
-        str(video_path),
-        mimetype="video/mp4",
-        chunksize=10 * 1024 * 1024,
-        resumable=True
+        str(video_path), mimetype="video/mp4",
+        chunksize=10 * 1024 * 1024, resumable=True
     )
     request = youtube.videos().insert(part="snippet,status", body=body, media_body=media)
  
