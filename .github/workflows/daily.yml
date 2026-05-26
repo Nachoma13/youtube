@@ -37,7 +37,7 @@ jobs:
           pip install \
             edge-tts \
             "moviepy==1.0.3" \
-            pillow \
+            "pillow==9.5.0" \
             requests \
             google-api-python-client \
             google-auth-oauthlib \
