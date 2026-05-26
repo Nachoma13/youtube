@@ -24,7 +24,7 @@ jobs:
         with:
           python-version: "3.11"
  
-      # ── 3. Herramientas del sistema (ffmpeg para MoviePy, fuentes para Pillow)
+      # ── 3. Herramientas del sistema
       - name: 🔧 Instalar ffmpeg y fuentes
         run: |
           sudo apt-get update -qq
@@ -37,7 +37,9 @@ jobs:
           pip install \
             edge-tts \
             "moviepy==1.0.3" \
-            "pillow==9.5.0" \
+            "Pillow==9.5.0" \
+            "imageio==2.25.1" \
+            "imageio-ffmpeg==0.4.9" \
             requests \
             google-api-python-client \
             google-auth-oauthlib \
