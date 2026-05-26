@@ -2,10 +2,7 @@ name: 🤖 Publicar vídeo diario en YouTube
  
 on:
   schedule:
-    # Cada día a las 10:00 AM hora España (UTC+2 en verano → 08:00 UTC)
     - cron: "0 8 * * *"
- 
-  # Permite lanzar manualmente desde la pestaña Actions de GitHub
   workflow_dispatch:
  
 jobs:
@@ -14,38 +11,30 @@ jobs:
     timeout-minutes: 45
  
     steps:
-      # ── 1. Descargar el código del repo
       - name: 📥 Checkout
         uses: actions/checkout@v4
  
-      # ── 2. Configurar Python
       - name: 🐍 Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
  
-      # ── 3. Herramientas del sistema
       - name: 🔧 Instalar ffmpeg y fuentes
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y ffmpeg fonts-dejavu-core
  
-      # ── 4. Dependencias Python
       - name: 📦 Instalar librerías Python
         run: |
           pip install --upgrade pip
           pip install \
             edge-tts \
-            "moviepy==1.0.3" \
-            "Pillow==9.5.0" \
-            "imageio==2.25.1" \
-            "imageio-ffmpeg==0.4.9" \
+            pillow \
             requests \
             google-api-python-client \
             google-auth-oauthlib \
             google-auth
  
-      # ── 5. Ejecutar el agente
       - name: 🚀 Ejecutar agente
         env:
           GROQ_API_KEY:             ${{ secrets.GROQ_API_KEY }}
@@ -55,7 +44,6 @@ jobs:
           YOUTUBE_CLIENT_SECRET:    ${{ secrets.YOUTUBE_CLIENT_SECRET }}
         run: python agent.py
  
-      # ── 6. Guardar el registro de vídeos publicados como artefacto
       - name: 💾 Guardar registro
         if: always()
         uses: actions/upload-artifact@v4
